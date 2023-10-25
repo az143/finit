@@ -27,7 +27,8 @@ TEST_DIR=$(dirname "$0"../)
 SYSROOT="${SYSROOT:-$(pwd)/${TEST_DIR}/sysroot}"
 
 unshare=$(command -v unshare)
-chroot=$(command -v chroot)
+chroot=$(command -v chroot) || true
+[ -z "$chroot" ] && chroot=/sbin/chroot # typically only in root's PATH
 
 export container="unshare"
 export PS1='\w \$ '
@@ -44,6 +45,5 @@ exec "$unshare"						\
      --user --map-root-user				\
      --fork --pid --mount-proc				\
      --mount						\
-     --mount-proc					\
      --uts --ipc --net					\
      "$chroot" "$SYSROOT" /sbin/chrootsetup.sh "$@"

@@ -35,7 +35,8 @@ TEST_DIR=$(dirname "$0"../)
 SYSROOT="${SYSROOT:-$(pwd)/${TEST_DIR}/sysroot}"
 
 nsenter=$(command -v nsenter)
-chroot=$(command -v chroot)
+chroot=$(command -v chroot) || true
+[ -z "$chroot" ] && chroot=/sbin/chroot # typically only in root's PATH
 
 export PS1='\w \$ '
 export PS2='> '
