@@ -1,6 +1,6 @@
 /* Parser for /etc/finit.conf and /etc/finit.d/<SVC>.conf
  *
- * Copyright (c) 2012-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2012-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -348,8 +348,11 @@ static void parse_kernel_loglevel(void)
  */
 void conf_parse_cmdline(int argc, char *argv[])
 {
+	const char *ptr;
+
 	/* Set up defaults */
-	fstab      = strdup(FINIT_FSTAB);
+	if ((ptr = FINIT_FSTAB))
+		fstab = strdup(ptr);
 	finit_conf = strdup(FINIT_CONF);
 	finit_rcsd = strdup(FINIT_RCSD);
 	path       = getenv("PATH");
@@ -445,7 +448,7 @@ void conf_save_exec_order(svc_t *svc, char *cmdline, int result)
 				free(prepared);
 			prepared = malloc(++len);
 			if (!prepared)
-				return;
+				goto done;
 			snprintf(prepared, len, "        %-7s  %-64s (%s)", svc_typestr(svc), cmdline, svc->desc);
 		}
 	} else {
@@ -458,7 +461,7 @@ void conf_save_exec_order(svc_t *svc, char *cmdline, int result)
 			fprintf(fp, "%s  %-7s  %-64s (%s)\n", ststr, svc_typestr(svc), cmdline, svc->desc);
 		}
 	}
-
+done:
 	fclose(fp);
 }
 
@@ -474,7 +477,7 @@ void conf_save_service(int type, char *cfg, char *file)
 	mkpath(FINIT_RUNPATH_, 0755);
 	snprintf(fn, sizeof(fn), "%s/%s", FINIT_RUNPATH_, file);
 	if (fexist(fn))
-		warn("File %s already exists, overwriting.", fn);
+		warnx("File %s already exists, overwriting.", fn);
 	fp = fopen(fn, "w");
 	if (!fp) {
 		err(1, "Failed creating %s", fn);
@@ -545,6 +548,23 @@ static void parse_env(char *line)
 			*end-- = 0;
 	}
 
+	/* strip any leading 'set ' */
+	end = key;
+	if (!strncmp(key, "set", 3))
+		end += 3;
+
+	/* check key, no spaces allowed */
+	while (*end && isspace(*end))
+		end++;
+	key = end;
+	while (*end && !isspace(*end))
+		end++;
+	if (*end != 0) {
+		warnx("'%s=%s': not a valid identifier", key, val);
+		return;	/* invalid key */
+	}
+
+	dbg("Global env '%s'='%s'", key, val);
 	setenv(key, val, 1);
 
 	node = malloc(sizeof(*node));
@@ -656,11 +676,22 @@ void conf_parse_cond(svc_t *svc, char *cond)
 		return;
 	}
 
-	/* First character must be '!' if SIGHUP is not supported. */
+	/*
+	 * First character must be '!' if:
+	 *   - service:  SIGHUP is not supported
+	 *   - run/task: Do not block bootstrap
+	 */
 	ptr = cond;
 	if (ptr[i] == '!') {
-		svc->sighup = 0;
 		ptr++;
+
+		if (svc_is_runtask(svc)) {
+			/* see service_runtask_clean() */
+			svc->sighup = 1;
+			svc->once = 1;
+		} else {
+			svc->sighup = 0;
+		}
 	}
 
 	while (ptr[i] != '>' && ptr[i] != 0)
@@ -945,6 +976,18 @@ static int parse_static(char *line, int is_rcsd)
 		if (cfglevel < 1 || cfglevel > 9 || cfglevel == 6)
 			cfglevel = 2; /* Fallback */
 		return 0;
+	}
+
+	/*
+	 * Before Finit 5 the default readiness notification is PID.
+	 * This default can be changed by setting 'readiness none' in
+	 * the file /etc/finit.conf, only read once at bootstrap.
+	 */
+	if (BOOTSTRAP && MATCH_CMD(line, "readiness ", x)) {
+		char *token = strip_line(x);
+
+		if (!strcmp(token, "none"))
+			readiness = SVC_NOTIFY_NONE;
 	}
 
 	if (MATCH_CMD(line, "reboot-delay ", x)) {
@@ -1271,7 +1314,7 @@ int conf_reload(void)
 			if (strncmp(path, FINIT_SYSPATH_, strlen(FINIT_SYSPATH_)) &&
 			    strncmp(path, FINIT_RUNPATH_, strlen(FINIT_RUNPATH_)))
 				continue;
-			if (strcmp(basename(path), basename(gl.gl_pathv[j])))
+			if (strcmp(basenm(path), basenm(gl.gl_pathv[j])))
 				continue;
 			path = NULL; /* replacement later in list, skip this */
 			break;
@@ -1382,21 +1425,28 @@ static int conf_change_act(char *dir, char *name, uint32_t mask)
 	struct conf_change *node;
 	char *rp = NULL;
 
-	if (name[0])
+	/* Check for actual printable characters, sometimes STX */
+	if (name[0] && name[0] >= ' ')
 		paste(fn, sizeof(fn), dir, name);
 	else
 		strlcpy(fn, dir, sizeof(fn));
 	dbg("path: %s mask: %08x", fn, mask);
 
-	/* Handle disabling/removal of service */
-	rp = realpath(fn, NULL);
-	if (!rp) {
-		if (errno != ENOENT)
-			goto fail;
+	if (strchr(name, '@')) {
+		/* Skip realpath for templates */
 		rp = strdup(fn);
-		if (!rp)
-			goto fail;
+	} else {
+		/* Handle disabling/removal of service */
+		rp = realpath(fn, NULL);
+		if (!rp) {
+			if (errno != ENOENT)
+				goto fail;
+			rp = strdup(fn);
+		}
 	}
+
+	if (!rp)
+		goto fail;
 
 	node = conf_find(rp);
 	if (node) {
@@ -1568,7 +1618,7 @@ int conf_init(uev_ctx_t *ctx)
 	 */
 #ifdef WDT_DEVNODE
 	if (whichp(FINIT_EXECPATH_ "/watchdogd") && fexist(WDT_DEVNODE)) {
-		conf_save_service(SVC_TYPE_SERVICE, "[S0123456789] cgroup.init name:watchdog :finit "
+		conf_save_service(SVC_TYPE_SERVICE, "[S0123456789] cgroup.init notify:none name:watchdog :finit "
 				  FINIT_EXECPATH_ "/watchdogd -- Finit watchdog daemon", "watchdogd.conf");
 	}
 #endif
@@ -1576,7 +1626,7 @@ int conf_init(uev_ctx_t *ctx)
 	 * Start kernel event daemon as soon as possible, if enabled
 	 */
 	if (whichp(FINIT_EXECPATH_ "/keventd"))
-		conf_save_service(SVC_TYPE_SERVICE, "[S0123456789] cgroup.init "
+		conf_save_service(SVC_TYPE_SERVICE, "[S12345789] cgroup.init notify:none "
 				  FINIT_EXECPATH_ "/keventd -- Finit kernel event daemon", "keventd.conf");
 
 	dbg("Allow plugins to register early runlevel 1 run/task/services ...");
@@ -1610,7 +1660,7 @@ int conf_init(uev_ctx_t *ctx)
 		if (runparts_sysv)
 			strlcat(args, "-s ", sizeof(args));
 
-		snprintf(conf, sizeof(conf), "[S] <int/bootstrap> log:console %s %s %s"
+		snprintf(conf, sizeof(conf), "[S] <int/bootstrap> notify:none log:console %s %s %s"
 			 " -- Calling runparts %s in the background",
 			 _PATH_RUNPARTS, args, runparts, runparts);
 		conf_save_service(SVC_TYPE_TASK, conf, "runparts.conf");

@@ -1,6 +1,6 @@
 /* Initialize and serve a login terminal
  *
- * Copyright (c) 2016-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2016-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -120,6 +120,9 @@ static int osrel(struct osrel *rel)
 		else
 			snprintf(rel->version, sizeof(rel->version), "(%s)", codename);
 	}
+
+	if (rel->id[0] && !strcmp(rel->id, "alpine"))
+		return 1;	/* compat mode for \r et al. */
 
 	return 0;
 }

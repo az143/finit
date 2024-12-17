@@ -1,6 +1,6 @@
 /* Finit control group support functions
  *
- * Copyright (c) 2019-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2019-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -462,6 +462,11 @@ void cgroup_init(uev_ctx_t *ctx)
 	char buf[80];
 	FILE *fp;
 	int fd;
+
+#ifndef CGROUP2_ENABLED
+	avail = 0;
+	return;
+#endif
 
 	if (mount("none", FINIT_CGPATH, "cgroup2", opts, NULL)) {
 		if (errno == ENOENT)

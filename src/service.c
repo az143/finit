@@ -1,7 +1,7 @@
 /* Finit service monitor, task starter and generic API for managing svc_t
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -330,14 +330,15 @@ static int lredirect(svc_t *svc)
 
 				snprintf(rot, sizeof(rot), "%d:%d", logfile_size_max, logfile_count_max);
 				snprintf(pid, sizeof(pid), "%d", svc_pid);
-				execlp("logger", "logger", "-f", svc->log.file, "-b", "-t", tag, "-p", prio, debug ? "-s" : "", "-I", pid, "-r", rot, NULL);
+				execlp("logger", "logger", "-f", svc->log.file, "-b", "-t", tag, "-p", prio, "-I", pid, "-r", rot, debug ? "-s" : NULL, NULL);
 			} else {
 				char sz[20], num[3];
 
 				snprintf(sz, sizeof(sz), "%d", logfile_size_max);
 				snprintf(num, sizeof(num), "%d", logfile_count_max);
 
-				execlp(_PATH_LOGIT, "logit", "-f", svc->log.file, "-n", sz, "-r", num, debug ? "-s" : "", NULL);
+				execlp(_PATH_LOGIT, "logit", "-f", svc->log.file, "-n", sz, "-r", num, debug ? "-s" : NULL, NULL);
+
 			}
 			_exit(1);
 		}
@@ -351,9 +352,9 @@ static int lredirect(svc_t *svc)
 			char pid[16];
 
 			snprintf(pid, sizeof(pid), "%d", svc_pid);
-			execlp("logger", "logger", "-t", tag, "-p", prio, debug ? "-s" : "", "-I", pid, NULL);
+			execlp("logger", "logger", "-t", tag, "-p", prio, "-I", pid, debug ? "-s" : NULL, NULL);
 		} else {
-			execlp(_PATH_LOGIT, "logit", "-t", tag, "-p", prio, debug ? "-s" : "", NULL);
+			execlp(_PATH_LOGIT, "logit", "-t", tag, "-p", prio, debug ? "-s" : NULL, NULL);
 		}
 		_exit(1);
 	}
@@ -394,11 +395,8 @@ static int redirect(svc_t *svc)
  */
 static void source_env(svc_t *svc)
 {
-	char buf[LINE_SIZE];
-	char *line;
-	size_t len;
+	char *buf, *val, *line, *fn;
 	FILE *fp;
-	char *fn;
 
 	fn = svc_getenv(svc);
 	if (!fn)
@@ -409,11 +407,19 @@ static void source_env(svc_t *svc)
 	if (!fp)
 		return;
 
+	buf = alloca(LINE_SIZE);
+	val = alloca(LINE_SIZE);
+	if (!buf || !val) {
+		warn("Failed allocating temporary env buffer");
+		return;
+	}
+
 	line = buf;
-	len = sizeof(buf);
-	while (fgets(line, len, fp)) {
+	while (fgets(line, LINE_SIZE, fp)) {
 		char *key = chomp(line);
+		wordexp_t we = { 0 };
 		char *value, *end;
+		size_t i;
 
 		/* skip any leading whitespace */
 		while (isspace(*key))
@@ -466,7 +472,40 @@ static void source_env(svc_t *svc)
 				*end-- = 0;
 		}
 
-		setenv(key, value, 1);
+		/* strip any leading 'set ' */
+		end = key;
+		if (!strncmp(key, "set", 3))
+			end += 3;
+
+		/* check key, no spaces allowed */
+		while (*end && isspace(*end))
+			end++;
+		key = end;
+		while (*end && !isspace(*end))
+			end++;
+		if (*end != 0) {
+			warnx("'%s=%s': not a valid identifier", key, val);
+			continue;	/* invalid key */
+		}
+
+		switch (wordexp(value, &we, 0)) {
+		case 0:
+			for (i = 0, *val = 0; i < we.we_wordc; i++) {
+				if (i > 0)
+					strlcat(val, " ", LINE_SIZE);
+				strlcat(val, we.we_wordv[i], LINE_SIZE);
+			}
+			setenv(key, val, 1);
+			wordfree(&we);
+			break;
+
+		case WRDE_NOSPACE:
+			wordfree(&we);
+			/* fallthrough */
+		default:
+			setenv(key, value, 1);
+			break;
+		}
 	}
 
 	fclose(fp);
@@ -679,11 +718,12 @@ static int service_start(svc_t *svc)
 			wordexp_t we = { 0 };
 			int rc;
 
-			if (svc->notify) {
+			if (svc->notify == SVC_NOTIFY_SYSTEMD || svc->notify == SVC_NOTIFY_S6) {
 				if (client_command(INIT_CMD_NOTIFY_SOCKET)) {
 					err(1, "%s: failed creating notify socket", svc_ident(svc, NULL, 0));
 					client_disconnect();
-					svc->notify = 0; /* does not change parent, restarting may work. */
+					/* does not change parent, restarting may work. */
+					svc->notify = SVC_NOTIFY_NONE;
 				} else {
 					char val[20];
 
@@ -708,7 +748,7 @@ static int service_start(svc_t *svc)
 				if (len == 0)
 					break;
 
-				if (svc->notify) {
+				if (svc->notify == SVC_NOTIFY_SYSTEMD || svc->notify == SVC_NOTIFY_S6) {
 					char *ptr = strstr(arg, "%n");
 
 					if (ptr) {
@@ -885,6 +925,19 @@ static void service_kill(svc_t *svc)
 		print(2, NULL);
 }
 
+/* Ensure we don't have any notify socket lingering */
+static void service_notify_stop(svc_t *svc)
+{
+	if (svc->notify != SVC_NOTIFY_SYSTEMD && svc->notify != SVC_NOTIFY_S6)
+		return;
+
+	uev_io_stop(&svc->notify_watcher);
+	if (svc->notify_watcher.fd > 0) {
+		close(svc->notify_watcher.fd);
+		svc->notify_watcher.fd = 0;
+	}
+}
+
 /*
  * Clean up any lingering state from dead/killed services
  */
@@ -900,12 +953,7 @@ static void service_cleanup(svc_t *svc)
 		logit(LOG_CRIT, "Failed removing service %s pidfile %s",
 		      svc_ident(svc, NULL, 0), fn);
 
-	/* Ensure we don't have any notify socket lingering */
-	if (svc->notify && svc->notify_watcher.fd > 0) {
-		uev_io_stop(&svc->notify_watcher);
-		close(svc->notify_watcher.fd);
-		svc->notify_watcher.fd = 0;
-	}
+	service_notify_stop(svc);
 
 	/* No longer running, update books. */
 	if (svc_is_tty(svc) && svc->pid > 1)
@@ -955,7 +1003,7 @@ int service_stop(svc_t *svc)
 			return 0;
 		}
 
-		dbg("Sending %s to pid:%d name:%s", sig, svc->pid, nm);
+		dbg("Sending %s to pid:%d name:%s(%s)", sig, svc->pid, id, nm);
 		logit(LOG_CONSOLE | LOG_NOTICE, "Stopping %s[%d], sending %s ...", id, svc->pid, sig);
 	} else {
 		logit(LOG_CONSOLE | LOG_NOTICE, "Calling '%s stop' ...", cmdline);
@@ -979,7 +1027,11 @@ int service_stop(svc_t *svc)
 	if (!svc->desc[0])
 		do_progress = 0;
 
-	if (runlevel != 1 && do_progress)
+	/*
+	 * Skip run/tasks in progress, would otherwise print silly stuff
+	 * like: "Stopping Shutting down" ...
+	 */
+	if (runlevel != 1 && do_progress && (svc_is_daemon(svc) || svc_is_sysv(svc)))
 		print_desc("Stopping ", svc->desc);
 
 	if (!svc_is_sysv(svc)) {
@@ -1035,7 +1087,7 @@ int service_stop(svc_t *svc)
 		}
 	}
 
-	if (runlevel != 1 && do_progress)
+	if (runlevel != 1 && do_progress && (svc_is_daemon(svc) || svc_is_sysv(svc)))
 		print_result(rc);
 
 	return rc;
@@ -1162,13 +1214,15 @@ static void parse_log(svc_t *svc, char *arg)
 	}
 }
 
-static int parse_notify(char *arg)
+static svc_notify_t parse_notify(char *arg)
 {
 	if (!strcmp(arg, "systemd"))
-		return 1;
+		return SVC_NOTIFY_SYSTEMD;
 	if (!strcmp(arg, "s6"))
-		return 2;
-	return 0;		/* unsupported/disabled */
+		return SVC_NOTIFY_S6;
+	if (!strcmp(arg, "pid"))
+		return SVC_NOTIFY_PID;
+	return SVC_NOTIFY_NONE;	/* unsupported/none */
 }
 
 static void parse_env(svc_t *svc, char *env)
@@ -1401,7 +1455,11 @@ static void parse_cmdline_args(svc_t *svc, char *cmd, char **args)
  * before they are started.  Or restarted, or even SIGHUP'ed, when the
  * gateway changes or interfaces come and go.  The special case when a
  * service is declared with <!> means it does not support SIGHUP but
- * must be STOP/START'ed at system reconfiguration.
+ * must be STOP/START'ed at system reconfiguration.  For run/task a <!>
+ * means Finit can relax its promise to run at least once per runlevel.
+ * I.e., for run/task conditions that would otherwise block bootstrap:
+ *
+ *     task [S0123456789] <!sys/pwr/fail> name:pwrfail initctl poweroff -- Power failure, shutting down
  *
  * Conditions can for example be: pid/NAME:ID for process dependencies,
  * net/<IFNAME>/up or net/<IFNAME>/exists.  The condition handling is
@@ -1563,7 +1621,7 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 		strlcat(ident, id, sizeof(ident));
 	}
 
-	if (ifstmt && !svc_ifthen(1, ident, ifstmt))
+	if (ifstmt && !svc_ifthen(1, ident, ifstmt, nowarn))
 		return 0;
 
 	levels = conf_parse_runlevels(runlevels);
@@ -1574,11 +1632,18 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 	}
 
 	if (type == SVC_TYPE_TTY) {
-		size_t i, len = 0;
+		size_t i, len;
+		char *ptr;
 
 		if (tty_parse_args(&tty, cmd, &args))
 			return errno;
 
+		if (tty_isatcon(tty.dev))
+			dev = tty_atcon();
+		else
+			dev = tty.dev;
+	next:
+		len = 0;
 		if (tty.cmd)
 			len += strlen(tty.cmd);
 		else
@@ -1601,14 +1666,22 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 		if (!cmd)
 			return errno;
 
-		if (tty_isatcon(tty.dev))
-			dev = tty_atcon();
-		else
-			dev = tty.dev;
-
 		/* tty's always respawn, never incr. restart_cnt */
 		respawn = 1;
-	next:
+
+		/* Create name:id tuple for identity, e.g., tty:S0 */
+		ptr = strrchr(dev, '/');
+		if (ptr)
+			ptr++;
+		else
+			ptr = dev;
+		if (!strncmp(ptr, "tty", 3))
+			ptr += 3;
+
+		name = "tty";
+		if (!id || id[0] == 0)
+			id = ptr;
+
 		svc = svc_find_by_tty(dev);
 	} else
 		svc = svc_find(name, id);
@@ -1664,8 +1737,6 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 	conf_parse_cond(svc, cond);
 
 	if (type == SVC_TYPE_TTY) {
-		char *ptr;
-
 		if (dev)
 			strlcpy(svc->dev, dev, sizeof(svc->dev));
 		if (tty.baud)
@@ -1680,19 +1751,6 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 
 		/* TTYs cannot be redirected */
 		log = NULL;
-
-		/* Create name:id tuple for identity, e.g., tty:S0 */
-		ptr = strrchr(svc->dev, '/');
-		if (ptr)
-			ptr++;
-		else
-			ptr = svc->dev;
-		if (!strncmp(ptr, "tty", 3))
-			ptr += 3;
-		if (!id || id[0] == 0)
-			id = ptr;
-		strlcpy(svc->name, "tty", sizeof(svc->name));
-		strlcpy(svc->id, id, sizeof(svc->id));
 	}
 
 	parse_cmdline_args(svc, cmd, &args);
@@ -1729,17 +1787,12 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 		else
 			svc->log.enabled = 0;
 	}
-	if (notify) {
-		int type = parse_notify(notify);
 
-		if (type <= 0)
-			goto disable_notify;
-		svc->notify = type;
-	} else if (svc->notify) {
-	disable_notify:
-		/* XXX: close existing socket */
-		svc->notify = 0;
-	}
+	if (notify)
+		svc->notify = parse_notify(notify);
+	  else
+		svc->notify = readiness;
+
 	if (desc)
 		strlcpy(svc->desc, desc, sizeof(svc->desc));
 	else if (type == SVC_TYPE_TTY)
@@ -1817,8 +1870,10 @@ int service_register(int type, char *cfg, struct rlimit rlimit[], char *file)
 	/* continue expanding any 'tty @console ...' */
 	if (tty_isatcon(tty.dev)) {
 		dev = tty_atcon();
-		if (dev)
+		if (dev) {
+			id = NULL; /* reset for next tty:ID */
 			goto next;
+		}
 	}
 
 	return 0;
@@ -1946,6 +2001,10 @@ static void svc_mark_affected(char *cond)
  * Called on conf_reload() to update service reverse dependencies.
  * E.g., if ospfd depends on zebra and the zebra Finit conf has
  * changed, we need to mark the ospfd Finit conf as changed too.
+ *
+ * However, a daemon that depends on syslogd (sysklogd project), need
+ * not be reloeaded (SIGHUP'ed or stop/started) because syslogd support
+ * reloading its configuration file on SIGHUP.
  */
 void service_update_rdeps(void)
 {
@@ -1956,6 +2015,10 @@ void service_update_rdeps(void)
 
 		if (!svc_is_changed(svc))
 			continue;
+
+		/* Service supports reloading conf without stop/start  */
+		if (!svc_is_nohup(svc))
+			continue; /* Yup, no need to stop start rdeps */
 
 		svc_mark_affected(mkcond(svc, cond, sizeof(cond)));
 	}
@@ -1975,7 +2038,7 @@ void service_mark_unavail(void)
 		if (!svc->ifstmt[0])
 			continue;
 
-		if (!svc_ifthen(1, svc_ident(svc, buf, sizeof(buf)), svc->ifstmt))
+		if (!svc_ifthen(1, svc_ident(svc, buf, sizeof(buf)), svc->ifstmt, svc->nowarn))
 			svc_mark(svc);
 	}
 }
@@ -2203,11 +2266,12 @@ static void service_retry(svc_t *svc)
 static void svc_set_state(svc_t *svc, svc_state_t new_state)
 {
 	svc_state_t *state = (svc_state_t *)&svc->state;
+	const svc_state_t old_state = svc->state;
 
 	/* if PID isn't collected within SVC_TERM_TIMEOUT msec, kill it! */
 	if (new_state == SVC_STOPPING_STATE) {
 		dbg("%s is stopping, wait %d sec before sending SIGKILL ...",
-		   svc_ident(svc, NULL, 0), svc->killdelay / 1000);
+		    svc_ident(svc, NULL, 0), svc->killdelay / 1000);
 		service_timeout_cancel(svc);
 		service_timeout_after(svc, svc->killdelay, service_kill);
 	}
@@ -2223,7 +2287,7 @@ static void svc_set_state(svc_t *svc, svc_state_t new_state)
 		snprintf(failure, sizeof(failure), "%s/%s/failure", svc_typestr(svc), svc_ident(svc, NULL, 0));
 
 		/* create success/failure condition when entering SVC_DONE_STATE. */
-		if (*state == SVC_DONE_STATE) {
+		if (new_state == SVC_DONE_STATE) {
 			if (svc->started && !WEXITSTATUS(svc->status))
 				cond_set_oneshot(success);
 			else
@@ -2231,7 +2295,7 @@ static void svc_set_state(svc_t *svc, svc_state_t new_state)
 		}
 
 		/* clear all conditions when entering SVC_HALTED_STATE. */
-		if (*state == SVC_HALTED_STATE) {
+		if (new_state == SVC_HALTED_STATE) {
 			cond_clear(success);
 			cond_clear(failure);
 		}
@@ -2241,9 +2305,16 @@ static void svc_set_state(svc_t *svc, svc_state_t new_state)
 		char cond[MAX_COND_LEN];
 
 		snprintf(cond, sizeof(cond), "service/%s/", svc_ident(svc, NULL, 0));
-		cond_clear(cond);
 
-		switch (svc->state) {
+		if ((old_state == SVC_RUNNING_STATE && new_state == SVC_PAUSED_STATE) ||
+		    (old_state == SVC_PAUSED_STATE  && new_state == SVC_RUNNING_STATE))
+			; 	/* only paused during reload, don't clear conds. */
+		else if (sm_is_in_teardown(&sm))
+			cond_clear_noupdate(cond);
+		else
+			cond_clear(cond);
+
+		switch (new_state) {
 		case SVC_HALTED_STATE:
 		case SVC_RUNNING_STATE:
 			strlcat(cond, svc_status(svc), sizeof(cond));
@@ -2271,8 +2342,8 @@ void service_forked(svc_t *svc)
 	svc_set_state(svc, SVC_RUNNING_STATE);
 }
 
-/* Set service/foo/ready condition for services and call optional ready:script */
-void service_ready(svc_t *svc)
+/* Set or clear service/foo/ready condition for services and call optional ready:script */
+void service_ready(svc_t *svc, int ready)
 {
 	char buf[MAX_COND_LEN];
 
@@ -2280,10 +2351,13 @@ void service_ready(svc_t *svc)
 		return;
 
 	snprintf(buf, sizeof(buf), "service/%s/ready", svc_ident(svc, NULL, 0));
-	cond_set(buf);
+	if (ready) {
+		cond_set(buf);
 
-	if (svc_has_ready(svc))
-		service_ready_script(svc);
+		if (svc_has_ready(svc))
+			service_ready_script(svc);
+	} else
+		cond_clear(buf);
 }
 
 /*
@@ -2337,11 +2411,7 @@ restart:
 			char condstr[MAX_COND_LEN];
 
 			dbg("%s: stopped, cleaning up timers and conditions ...", svc_ident(svc, NULL, 0));
-			if (svc->notify && svc->notify_watcher.fd > 0) {
-				uev_io_stop(&svc->notify_watcher);
-				close(svc->notify_watcher.fd);
-				svc->notify_watcher.fd = 0;
-			}
+			service_notify_stop(svc);
 
 			service_timeout_cancel(svc);
 			cond_clear(mkcond(svc, condstr, sizeof(condstr)));
@@ -2481,7 +2551,7 @@ restart:
 
 		case COND_ON:
 			if (svc_is_changed(svc)) {
-				if (svc_nohup(svc))
+				if (svc_nohup(svc) || !svc_is_daemon(svc))
 					service_stop(svc);
 				else {
 					/*
@@ -2495,6 +2565,8 @@ restart:
 
 				svc_mark_clean(svc);
 			}
+			if (svc->notify == SVC_NOTIFY_NONE)
+				service_ready(svc, 1);
 			break;
 		}
 		break;
@@ -2519,16 +2591,21 @@ restart:
 			svc_set_state(svc, SVC_RUNNING_STATE);
 			/* Reassert condition if we go from waiting and no change */
 			if (!svc_is_changed(svc)) {
-				char name[MAX_COND_LEN];
+				if (svc->notify == SVC_NOTIFY_PID) {
+					char name[MAX_COND_LEN];
 
-				mkcond(svc, name, sizeof(name));
-				dbg("Reassert condition %s", name);
-				cond_set_path(cond_path(name), COND_ON);
+					mkcond(svc, name, sizeof(name));
+					dbg("Reassert condition %s", name);
+					cond_set_path(cond_path(name), COND_ON);
+				}
+
+				dbg("Reassert %s ready condition", svc_ident(svc, NULL, 0));
+				service_ready(svc, 1);
 			}
 			break;
 
 		case COND_OFF:
-			dbg("Condition for %s is off, sending SIGCONT + SIGTERM", svc->name);
+			dbg("Condition for %s is off, sending SIGCONT + SIGTERM", svc_ident(svc, NULL, 0));
 			kill(svc->pid, SIGCONT);
 			service_stop(svc);
 			break;
@@ -2582,7 +2659,12 @@ void service_runtask_clean(void)
 		if (!svc_is_runtask(svc))
 			continue;
 
-		svc->once = 0;
+		/* run/task declared with <!> */
+		if (svc->sighup)
+			svc->once = 1;
+		else
+			svc->once = 0;
+
 		if (svc->state == SVC_DONE_STATE)
 			svc_set_state(svc, SVC_HALTED_STATE);
 	}
@@ -2590,6 +2672,7 @@ void service_runtask_clean(void)
 
 /**
  * service_completed - Have run/task completed in current runlevel
+ * @svcp: On %FALSE return, this points to the first incomplete svc
  *
  * This function checks if all run/task have run once in the current
  * runlevel.  E.g., at bootstrap we must wait for these scripts or
@@ -2602,7 +2685,7 @@ void service_runtask_clean(void)
  * Returns:
  * %TRUE(1) or %FALSE(0)
  */
-int service_completed(void)
+int service_completed(svc_t **svcp)
 {
 	svc_t *svc, *iter = NULL;
 
@@ -2624,6 +2707,8 @@ int service_completed(void)
 
 		if (!svc->once) {
 			dbg("%s has not yet completed ...", svc_ident(svc, NULL, 0));
+			if (svcp)
+				*svcp = svc;
 			return 0;
 		}
 		dbg("%s has completed ...", svc_ident(svc, NULL, 0));
@@ -2642,16 +2727,16 @@ void service_notify_reconf(void)
 	svc_t *svc, *iter = NULL;
 
 	for (svc = svc_iterator(&iter, 1); svc; svc = svc_iterator(&iter, 0)) {
-		if (!svc->notify)
+		if (svc->notify == SVC_NOTIFY_PID)
 			continue; /* managed by pidfile plugin */
 
 		if (svc->state != SVC_RUNNING_STATE)
 			continue;
 
-		if (svc_is_changed(svc) || svc_is_starting(svc))
+		if (svc->notify != SVC_NOTIFY_NONE && (svc_is_changed(svc) || svc_is_starting(svc)))
 			continue;
 
-		service_ready(svc);
+		service_ready(svc, 1);
 	}
 }
 
@@ -2692,10 +2777,10 @@ void service_notify_cb(uev_t *w, void *arg, int events)
 		 * the service_notify_reconf() function to step the
 		 * generation of the READY condition.
 		 */
-		service_ready(svc);
+		service_ready(svc, 1);
 
 		/* s6 applications close their socket after notification */
-		if (svc->notify == 2) {
+		if (svc->notify == SVC_NOTIFY_S6) {
 			uev_io_stop(w);
 			close(w->fd);
 			w->fd = 0;

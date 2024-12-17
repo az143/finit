@@ -11,7 +11,9 @@ EXTRA_DIST		 = skel/bin/busybox-x86_64.sha256 skel/sbin/service.sh skel/etc/env 
 			   skel/cdrom/.empty skel/dev/shm/.empty skel/dev/pts/.empty	     \
 			   skel/etc/inittab skel/etc/hostname skel/etc/fstab 		     \
 			   skel/etc/init.d/rcS skel/etc/init.d/rcK skel/tmp/.empty	     \
-			   skel/etc/finit.d/.empty skel/sbin/task.sh skel/bin/crasher.sh     \
+			   skel/etc/finit.d/.empty skel/etc/finit.d/available/.empty	     \
+			   skel/etc/finit.d/enabled/.empty 				     \
+			   skel/sbin/task.sh skel/bin/crasher.sh			     \
 			   skel/etc/init.d/S01-service.sh skel/etc/init.d/S02-serv.sh	     \
 			   skel/proc/.empty skel/root/.empty skel/run/.empty		     \
 			   skel/sbin/chrootsetup.sh skel/srv/.empty skel/sys/.empty	     \
@@ -32,11 +34,13 @@ EXTRA_DIST		+= crashing.sh
 EXTRA_DIST		+= depserv.sh
 EXTRA_DIST		+= devmon.sh
 EXTRA_DIST		+= failing-sysv.sh
+EXTRA_DIST		+= svc-env.sh
 EXTRA_DIST		+= global-envs.sh
 EXTRA_DIST		+= initctl-status-subset.sh
 EXTRA_DIST		+= notify.sh
 EXTRA_DIST		+= pidfile.sh
 EXTRA_DIST		+= pre-post-serv.sh
+EXTRA_DIST		+= process-depends.sh
 EXTRA_DIST		+= rclocal.sh
 EXTRA_DIST		+= ready-serv.sh
 EXTRA_DIST		+= restart-self.sh
@@ -53,6 +57,7 @@ EXTRA_DIST		+= start-stop-sysv.sh
 EXTRA_DIST		+= start-stop-serv.sh
 EXTRA_DIST		+= signal-service.sh
 EXTRA_DIST		+= testserv.sh
+EXTRA_DIST		+= unexpected-restart.sh
 
 AM_TESTS_ENVIRONMENT	 = SYSROOT='$(abs_builddir)/sysroot/';
 AM_TESTS_ENVIRONMENT	+= export SYSROOT;
@@ -75,11 +80,13 @@ TESTS			+= crashing.sh
 TESTS			+= depserv.sh
 TESTS			+= devmon.sh
 TESTS			+= failing-sysv.sh
+TESTS			+= svc-env.sh
 TESTS			+= global-envs.sh
 TESTS			+= initctl-status-subset.sh
 TESTS			+= notify.sh
 TESTS			+= pidfile.sh
 TESTS			+= pre-post-serv.sh
+TESTS			+= process-depends.sh
 TESTS			+= rclocal.sh
 TESTS			+= ready-serv.sh
 TESTS			+= restart-self.sh
@@ -98,6 +105,7 @@ TESTS			+= signal-service.sh
 if TESTSERV
 TESTS			+= testserv.sh
 endif
+TESTS			+= unexpected-restart.sh
 
 check-recursive: setup-chroot
 

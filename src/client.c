@@ -1,6 +1,6 @@
 /* External client API, using UNIX domain socket.
  *
- * Copyright (c) 2015-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2015-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,6 +28,8 @@
 
 #include "client.h"
 #include "log.h"
+
+#define REQUEST_TIMEOUT 15000
 
 static int sd = -1;
 
@@ -85,7 +87,7 @@ int client_request(struct init_request *rq, ssize_t len)
 
 	pfd.fd     = sd;
 	pfd.events = POLLOUT;
-	if (poll(&pfd, 1, 2000) <= 0) {
+	if (poll(&pfd, 1, REQUEST_TIMEOUT) <= 0) {
 		warn("Timed out waiting for Finit, errno %d", errno);
 		return -1;
 	}
@@ -107,7 +109,7 @@ int client_request(struct init_request *rq, ssize_t len)
 
 	pfd.fd = sd;
 	pfd.events = POLLIN | POLLERR | POLLHUP;
-	if ((rc = poll(&pfd, 1, 2000)) <= 0) {
+	if ((rc = poll(&pfd, 1, REQUEST_TIMEOUT)) <= 0) {
 		if (rc) {
 			if (errno == EINTR) /* shutdown/reboot */
 				return -1;

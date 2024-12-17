@@ -1,7 +1,7 @@
 /* Simple pidfile event monitor for the Finit condition engine
  *
  * Copyright (c) 2015-2016  Tobias Waldekranz <tobias@waldekranz.com>
- * Copyright (c) 2016-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2016-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -52,7 +52,7 @@ static int pidfile_add_path(struct iwatch *iw, char *path)
 			ptr = slash++;
 			slash = strchr(ptr, '/');
 			if (slash) {
-				dbg("Path too deep, skipping.");
+				dbg("Path too deep, skipping %s", path);
 				return -1;
 			}
 		}
@@ -66,6 +66,7 @@ static void pidfile_update_conds(char *dir, char *name, uint32_t mask)
 	char cond[MAX_COND_LEN];
 	char fn[PATH_MAX];
 	svc_t *svc;
+	char *nm;
 
 	paste(fn, sizeof(fn), dir, name);
 	if (fnmatch("*\\.pid", fn, 0) && fnmatch("*/pid", fn, 0))
@@ -79,8 +80,15 @@ static void pidfile_update_conds(char *dir, char *name, uint32_t mask)
 		return;
 	}
 
-	dbg("Found svc %s for %s with pid %d", svc->name, fn, svc->pid);
+	/* Service condistion to set/clear */
 	mkcond(svc, cond, sizeof(cond));
+
+	nm = svc_ident(svc, NULL, 0);
+	dbg("Found svc %s for %s with pid %d", nm, fn, svc->pid);
+	if (svc_is_stopping(svc)) {
+		dbg("Ignoring pidfile death rattles while service %s is %s", nm, svc_status(svc));
+		goto sneaky_zebra;
+	}
 
 	if (mask & (IN_CLOSE_WRITE | IN_ATTRIB | IN_MODIFY | IN_MOVED_TO)) {
 		/*
@@ -88,7 +96,7 @@ static void pidfile_update_conds(char *dir, char *name, uint32_t mask)
 		 * systemd style services rely on their respective
 		 * readiness notification.  Issue #343
 		 */
-		if (!svc->notify)
+		if (svc->notify == SVC_NOTIFY_PID)
 			svc_started(svc);
 
 		if (!svc_has_pidfile(svc)) {
@@ -120,13 +128,15 @@ static void pidfile_update_conds(char *dir, char *name, uint32_t mask)
 			}
 		}
 
-		cond_set(cond);
-		if (!svc->notify)
-			service_ready(svc);
+		if (svc->notify == SVC_NOTIFY_PID)
+			cond_set(cond);
+		if (svc->notify == SVC_NOTIFY_PID || svc->notify == SVC_NOTIFY_NONE)
+			service_ready(svc, 1);
 	} else if (mask & IN_DELETE) {
+	sneaky_zebra:
 		cond_clear(cond);
-		if (!svc->notify)
-			service_ready(svc);
+		if (svc->notify == SVC_NOTIFY_PID)
+			service_ready(svc, 0);
 	}
 }
 
@@ -240,8 +250,8 @@ static void pidfile_reconf(void *arg)
 		if (svc_is_changed(svc) || svc_is_starting(svc))
 			continue;
 
-		if (!svc->notify)
-			service_ready(svc);
+		if (svc->notify == SVC_NOTIFY_PID)
+			service_ready(svc, 1);
 
 		mkcond(svc, cond, sizeof(cond));
 		if (cond_get(cond) == COND_ON)

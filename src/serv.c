@@ -1,6 +1,6 @@
 /* List and enable/disable service configurations
  *
- * Copyright (c) 2017-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2017-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -222,18 +222,11 @@ int serv_list(char *arg)
  * If the resulting file doesn't exist, and creat is not set, *or*
  * the base directory doesn't exist, we return NULL.
 .*/
-static char *conf(char *path, size_t len, char *name, int creat)
+static char *conf(char *path, size_t len, char *name, int creat, int template)
 {
-	char corr[40];
-
 	if (!name || !name[0] || !strcmp(name, "finit") || !strcmp(name, "finit.conf")) {
 		strlcpy(path, finit_conf, len);
 		return path;
-	}
-
-	if (!strstr(name, ".conf")) {
-		snprintf(corr, sizeof(corr), "%s.conf", name);
-		name = corr;
 	}
 
 	if (!fisdir(finit_rcsd))
@@ -243,14 +236,25 @@ static char *conf(char *path, size_t len, char *name, int creat)
 	if (!fisdir(path)) {
 		if (creat && mkdir(path, 0755) && errno != EEXIST)
 			return NULL;
-		else
-			paste(path, len, finit_rcsd, name);
+		paste(path, len, finit_rcsd, name);
 	} else
 		strlcat(path, name, len);
 
+	if (suffix(path, len, ".conf"))
+		return NULL;
+
 	/* fall back to static service unless edit/create */
-	if (!creat && !fexist(path))
-		paste(path, len, finit_rcsd, name);
+	if (!creat && !fexist(path)) {
+		char *at = strchr(path, '@');
+
+		if (template && at)
+			*++at = 0;
+		else
+			paste(path, len, finit_rcsd, name);
+
+		if (suffix(path, len, ".conf"))
+			return NULL;
+	}
 
 	return path;
 }
@@ -336,14 +340,14 @@ int do_disable(char *arg, int check)
 		return serv_list("available");
 	}
 
-	len = strlen(arg);
-	serv = alloca(len + 6);
+	len = strlen(arg) + 7;
+	serv = alloca(len);
 	if (!serv)
 		ERR(71, "failed allocating stack");
 
-	strlcpy(serv, arg, len + 6);
-	if (len < 6 || strcmp(&serv[len - 5], ".conf"))
-		strlcat(serv, ".conf", len + 6);
+	strlcpy(serv, arg, len);
+	if (suffix(serv, len, ".conf"))
+		ERR(71, "failed composing service name (%s)", serv);
 
 	if (chdir(finit_rcsd))
 		ERR(72, "failed cd %s", finit_rcsd);
@@ -374,20 +378,30 @@ int serv_touch(char *arg)
 		return serv_list("enabled");
 	}
 
-	fn = conf(path, sizeof(path), arg, 0);
+	/* 1. Try /etc/finit.d/enabled/$arg.conf to handle template@.conf */
+	paste(path, sizeof(path), finit_rcsd, "enabled/");
+	strlcat(path, arg, sizeof(path));
+	if (!suffix(path, sizeof(path), ".conf") && fexist(path)) {
+		fn = path;
+		goto touchit;
+	}
+
+	/* 2. Try /etc/finit.d/available/$arg.conf and other combos (legacy) */
+	fn = conf(path, sizeof(path), arg, 0, 0);
 	if (!fexist(fn)) {
 		if (!strstr(arg, "finit.conf"))
-			ERRX(72, "%s not available.", arg);
+			ERRX(noerr ? 0 : 72, "%s not available.", arg);
 		if (is_builtin(arg))
-			ERRX(4, "%s is a built-in service.", arg);
+			ERRX(noerr ? 0 : 4, "%s is a built-in service.", arg);
 
 		strlcpy(path, finit_conf, sizeof(path));
 		fn = path;
 	}
 
+touchit:
 	/* libite:touch() follows symlinks */
 	if (utimensat(AT_FDCWD, fn, NULL, AT_SYMLINK_NOFOLLOW))
-		ERR(71, "failed marking %s for reload", fn);
+		ERR(noerr ? 0 : 71, "failed marking %s for reload", fn);
 
 	return 0;
 }
@@ -397,13 +411,18 @@ int serv_show(char *arg)
 	char path[256];
 	char *fn;
 
-	fn = conf(path, sizeof(path), arg, 0);
+	fn = conf(path, sizeof(path), arg, 0, 0);
 	if (!fexist(fn)) {
 		if (is_builtin(arg))
 			ERRX(4, "%s is a built-in service.", arg);
 
-		WARNX("Cannot find %s", arg);
-		return 1;
+		fn = conf(path, sizeof(path), arg, 0, 1);
+		if (!fn || !fexist(fn)) {
+			WARNX("Cannot find %s", arg);
+			return 1;
+		}
+
+		return systemf("cat %s | sed 's/%%i/system/g'", fn);
 	}
 
 	return systemf("cat %s", fn);
@@ -434,7 +453,7 @@ static int do_edit(char *arg, int creat)
 	char path[256];
 	char *fn;
 
-	fn = conf(path, sizeof(path), arg, creat);
+	fn = conf(path, sizeof(path), arg, creat, 0);
 	if (!fexist(fn)) {
 		if (is_builtin(arg))
 			ERRX(4, "%s is a built-in service.", arg);
@@ -488,7 +507,7 @@ int serv_creat(char *arg)
 		return do_edit(arg, 1);
 
 	/* Open fn for writing from pipe */
-	fn = conf(buf, sizeof(buf), arg, 1);
+	fn = conf(buf, sizeof(buf), arg, 1, 0);
 	if (!fn)
 		ERR(73, "failed creating conf %s", arg);
 
@@ -517,7 +536,7 @@ int serv_delete(char *arg)
 		return serv_list("available");
 	}
 
-	fn = conf(buf, sizeof(buf), arg, 0);
+	fn = conf(buf, sizeof(buf), arg, 0, 0);
 	if (!fn) {
 		if (is_builtin(arg))
 			ERRX(4, "%s is a built-in service.", arg);

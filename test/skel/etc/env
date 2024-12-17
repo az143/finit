@@ -3,3 +3,7 @@
 
 foo=bar
 baz=qux
+
+xyzzy=$foo
+
+FOO_ARGS="-i $foo -l $xyzzy endarg"

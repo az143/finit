@@ -1,7 +1,7 @@
 /* Finit service monitor, task starter and generic API for managing svc_t
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,14 +42,14 @@ int       service_timeout_after  (svc_t *svc, int timeout, void (*cb)(svc_t *svc
 int       service_timeout_cancel (svc_t *svc);
 
 void      service_forked         (svc_t *svc);
-void      service_ready          (svc_t *svc);
+void      service_ready          (svc_t *svc, int ready);
 
 int       service_stop           (svc_t *svc);
 int       service_step           (svc_t *svc);
 void      service_step_all       (int types);
 void      service_worker         (void *unused);
 
-int       service_completed      (void);
+int       service_completed      (svc_t **svc);
 void      service_notify_reconf  (void);
 
 void      service_init           (uev_ctx_t *ctx);

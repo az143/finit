@@ -10,6 +10,10 @@ if DOC
 SUBDIRS           += doc
 endif
 
+if BASH
+bashdir            = $(BASH_DIR)
+dist_bash_DATA     = initctl
+endif
 # Compat hook
 install-dev:
 	@make -C src install-pkgincludeHEADERS
@@ -30,6 +34,7 @@ release: distcheck
 		printf "$$file.sha256\t"; cat ../$$file.sha256 | cut -f1 -d' ';	\
 	done
 
-DISTCHECK_CONFIGURE_FLAGS = --prefix=/usr --sysconfdir=/etc --localstatedir=/var \
-			    --enable-testserv-plugin --enable-x11-common-plugin  \
-			    --with-watchdog --with-keventd --with-fstab=/etc/fstab
+DISTCHECK_CONFIGURE_FLAGS = --prefix=/usr --sysconfdir=/etc --localstatedir=/var   \
+			    --enable-testserv-plugin --enable-x11-common-plugin    \
+			    --with-watchdog --with-keventd --with-fstab=/etc/fstab \
+			    --with-bash-completion-dir=no

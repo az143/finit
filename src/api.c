@@ -1,6 +1,6 @@
 /* External client API, using UNIX domain socket.
  *
- * Copyright (c) 2015-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2015-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -377,7 +377,9 @@ static void api_cb(uev_t *w, void *arg, int events)
 		case INIT_CMD_POWEROFF:
 		case INIT_CMD_SUSPEND:
 			if (IS_RESERVED_RUNLEVEL(runlevel)) {
-				warnx("Unsupported command in runlevel S and 6/0.");
+				strterm(rq.data, sizeof(rq.data));
+				warnx("Unsupported command (cmd: %d, data: %s) in runlevel S and 6/0.",
+				      rq.cmd, rq.data);
 				goto leave;
 			}
 		default:

@@ -1,6 +1,6 @@
 /* Setup and start system message bus, D-Bus
  *
- * Copyright (c) 2012-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2012-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -143,18 +143,18 @@ static void setup(void *arg)
 
 	/* Generate machine id for dbus */
 	if (whichp("dbus-uuidgen"))
-		run_interactive("dbus-uuidgen --ensure", "Creating machine UUID for D-Bus");
+		run_interactive("dbus-uuidgen --ensure", "Verifying D-Bus machine UUID");
 
 	/*
 	 * Register service with Finit
 	 * Note: dbus drops privs after starting up.
 	 */
 	if (pidfn) {
-		snprintf(line, sizeof(line), "[S123456789] cgroup.system name:dbus pid:!%s %s %s -- %s",
+		snprintf(line, sizeof(line), "[S123456789] cgroup.system notify:none name:dbus pid:!%s %s %s -- %s",
 			 pidfn, cmd, DBUS_ARGS, DBUS_DESC);
 		free(pidfn);
 	} else
-		snprintf(line, sizeof(line), "[S123456789] cgroup.system name:dbus %s %s -- %s",
+		snprintf(line, sizeof(line), "[S123456789] cgroup.system notify:none name:dbus %s %s -- %s",
 			 cmd, DBUS_ARGS, DBUS_DESC);
 
 	conf_save_service(SVC_TYPE_SERVICE, line, "dbus.conf");

@@ -1,6 +1,6 @@
 /* Coldplug modules using modalias magic
  *
- * Copyright (c) 2021-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2021-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -132,11 +132,10 @@ static FILE *maybe_fopen_alias(const char *file, const char *path)
 {
 	const char *basename;
 
-	basename = rindex(path, '/');
-	if (!basename)
+	basename = basenm(path);
+	if (!strcmp(basename, path))
 		return NULL;
 
-	basename++;
 	if (strcmp(file, basename))
 		return NULL;
 

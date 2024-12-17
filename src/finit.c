@@ -1,7 +1,7 @@
 /* Finit - Fast /sbin/init replacement w/ I/O, hook & service plugins
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -69,6 +69,7 @@ int   single    = 0;		/* single user mode from kernel cmdline */
 int   bootstrap = 1;		/* set while bootrapping (for TTYs) */
 int   kerndebug = 0;		/* set if /proc/sys/kernel/printk > 7 */
 int   syncsec   = 0;		/* reboot delay */
+int   readiness = SVC_NOTIFY_PID;
 char *finit_conf= NULL;
 char *finit_rcsd= NULL;
 char *fstab     = NULL;
@@ -86,14 +87,22 @@ svc_t *wdog     = NULL;		/* No watchdog by default */
  */
 static void banner(void)
 {
+#ifndef KERNEL_LOGGING
 	/*
 	 * Silence kernel logs, assuming users have sysklogd or
-	 * similar enabled to start emptying /dev/kmsg, but for
-	 * our progress we want to own the console.
+	 * similar enabled to start emptying /dev/kmsg.
+	 *
+	 * Instead of using `configure --disable-kernel-logging`, we
+	 * recommend adjusting the kernel log level in the kernel's
+	 * menuconfig, or using sysctl kernel.printk, or setting the
+	 * desired log level, on the kernel cmdline, e.g. 'quiet'.
+	 *
+	 * By default KERNEL_LOGGING is enabled so you can see any
+	 * warnings/errors or higher on your system console.
 	 */
 	if (!debug && !kerndebug)
 		klogctl(6, NULL, 0);
-
+#endif
 	/*
 	 * First level hooks, if you want to run here, you're
 	 * pretty much on your own.  Nothing's up yet ...
@@ -354,6 +363,8 @@ static void fs_remount_root(int fsckerr)
  */
 static void fs_finalize(void)
 {
+	int flags = MS_NOEXEC | MS_NOSUID;
+
 	/*
 	 * Some systems rely on us to both create /dev/shm and, to mount
 	 * a tmpfs there.  Any system with dbus needs shared memory, so
@@ -361,8 +372,8 @@ static void fs_finalize(void)
 	 * the /etc/fstab file already.
 	 */
 	if (!fismnt("/dev/shm")) {
-		makedir("/dev/shm", 0777);
-		fs_mount("shm", "/dev/shm", "tmpfs", 0, "mode=0777");
+		makedir("/dev/shm", 1777);
+		fs_mount("shm", "/dev/shm", "tmpfs", flags | MS_NODEV, "mode=1777");
 	}
 
 	/* Modern systems use /dev/pts */
@@ -380,7 +391,13 @@ static void fs_finalize(void)
 		snprintf(opts, sizeof(opts), "gid=%d,mode=%d,ptmxmode=0666", gid, mode);
 
 		makedir("/dev/pts", 0755);
-		fs_mount("devpts", "/dev/pts", "devpts", MS_NOSUID | MS_NOEXEC, opts);
+		fs_mount("devpts", "/dev/pts", "devpts", flags, opts);
+	}
+
+	/* Needed on systems like Alpine Linux */
+	if (!fismnt("/dev/mqueue")) {
+		makedir("/dev/mqueue", 1777);
+		fs_mount("mqueue", "/dev/mqueue", "tmpfs", flags | MS_NODEV, NULL);
 	}
 
 	/*
@@ -392,7 +409,7 @@ static void fs_finalize(void)
 	 * To override any of this behavior, add entries to /etc/fstab
 	 * for /run (and optionally /run/lock).
 	 */
-	if (fisdir("/run") && !fismnt("/run")) {
+	if (fisdir("/run") && !fismnt("/run") && !fistmpfs("/run")) {
 		fs_mount("tmpfs", "/run", "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC | MS_RELATIME, "mode=0755,size=10%");
 
 		/* This prevents user DoS of /run by filling /run/lock at the expense of another tmpfs, max 5MiB */
@@ -401,7 +418,7 @@ static void fs_finalize(void)
 	}
 
 	/* Modern systems use tmpfs for /tmp */
-	if (!fismnt("/tmp"))
+	if (!fismnt("/tmp") && !fistmpfs("/tmp"))
 		fs_mount("tmpfs", "/tmp", "tmpfs", MS_NOSUID | MS_NODEV, "mode=1777");
 }
 
@@ -697,7 +714,7 @@ int main(int argc, char *argv[])
 
 	/* Some bootstrap tasks may need to know if we're in a container. */
 	if (in_container())
-		cond_set("int/container");
+		cond_set_oneshot("int/container");
 
 	/*
 	 * Initialize .conf system and load static /etc/finit.conf then

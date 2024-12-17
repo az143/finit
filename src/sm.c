@@ -52,22 +52,30 @@ sm_t sm;
  */
 static void sm_check_bootstrap(void *work)
 {
-	static int cnt = 120 * 10;	/* We run with 100ms period */
-        int level = cfglevel;
+	static int timeout = 120;
+	int bootstrap_done;
+	int level = cfglevel;
+	svc_t *svc = NULL;
 
 	dbg("Step all services ...");
 	service_step_all(SVC_TYPE_ANY);
 
-	if (cnt-- > 0 && !service_completed()) {
-		dbg("Not all bootstrap run/tasks have completed yet ... %d", cnt);
+	bootstrap_done = service_completed(&svc);
+	if (timeout-- > 0 && !bootstrap_done) {
+		dbg("Not all bootstrap run/tasks have completed yet ... %d", timeout);
 		schedule_work(work);
 		return;
 	}
 
-	if (cnt > 0)
+	if (timeout > 0) {
 		dbg("All run/task have completed, resuming bootstrap.");
-	else
+	} else {
 		dbg("Timeout, resuming bootstrap.");
+		if (svc)
+			print(2, "Timeout waiting for %s to run, resuming bootstrap", svc_ident(svc, NULL, 0));
+		else
+			print(2, "Timeout waiting for unknown run/task, resuming bootstrap");
+	}
 
 	dbg("Flushing pending .conf file events ...");
 	conf_flush_events();
@@ -208,7 +216,7 @@ restart:
 		service_step_all(SVC_TYPE_ANY);
 
 		/* Allow runparts to start */
-		cond_set("int/bootstrap");
+		cond_set_oneshot("int/bootstrap");
 
 		if (sm->newlevel == -1)
 			break;
@@ -308,9 +316,11 @@ restart:
 		/* Cleanup stale services */
 		svc_clean_dynamic(service_unregister);
 
+#ifdef FINIT_RC_LOCAL
 		/* Compat SysV init */
 		if (prevlevel == INIT_LEVEL && !rescue)
 			run_bg(FINIT_RC_LOCAL, NULL);
+#endif
 
 		/*
 		 * "I've seen things you people wouldn't believe.  Attack ships on fire off

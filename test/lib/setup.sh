@@ -96,6 +96,14 @@ assert_nocond()
 	assert "Condition $cond cleared" "$(texec initctl -v cond get "$cond")" = "off"
 }
 
+assert_ready()
+{
+    srv=$1
+    cond="service/$srv/ready"
+
+    assert "$cond asserted" "$(texec initctl cond dump |grep "<$cond>" |awk '{print $3}')" = "on"
+}
+
 assert_is_pidfile()
 {
 	assert "Process has PID file: $2" "$(texec initctl -p status "$1" | awk '/PID file/{print $4}')" = "$2"
@@ -143,7 +151,15 @@ log()
 
 sep()
 {
-	printf "\e[2m――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――\e[0m\n"
+    heading=${1:-}
+    if [ -n "$heading" ]; then
+	num=$((72 - ${#heading} - 1))
+	printf "\e[1m%s " "$heading"
+	printf -- "―%.0s" $(seq 1 $num)
+	printf "\e[0m\n"
+    else
+	printf "\e[1m――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――――\e[0m\n"
+    fi
 }
 
 say()

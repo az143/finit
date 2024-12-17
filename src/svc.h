@@ -1,7 +1,7 @@
 /* Low-level service primitives and generic API for managing svc_t structures
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -82,6 +82,14 @@ typedef enum {
 	SVC_ONCRASH_REBOOT,
 	SVC_ONCRASH_SCRIPT,
 } svc_oncrash_action_t;
+
+/* 0: none, 1: systemd, 2: s6 */
+typedef enum {
+	SVC_NOTIFY_NONE = 0,
+	SVC_NOTIFY_PID,
+	SVC_NOTIFY_SYSTEMD,
+	SVC_NOTIFY_S6,
+} svc_notify_t;
 
 #define MAX_ID_LEN       16
 #define MAX_ARG_LEN      64
@@ -202,7 +210,7 @@ typedef struct svc {
 	/*
 	 * Readiness notification socket: systemd, s6
 	 */
-	int	       notify;	       /* 0: none, 1: systemd, 2: s6 */
+	svc_notify_t   notify;
 	uev_t	       notify_watcher; /* i/o watcher */
 
 	/* time at svc_del(), used by gc timer */
@@ -241,7 +249,7 @@ void	    svc_prune_bootstrap	   (void);
 void        svc_enable             (svc_t *svc);
 int         svc_enabled            (svc_t *svc);
 int         svc_conflicts          (svc_t *svc);
-int         svc_ifthen             (int is_conf, const char *ident, char *stmt);
+int         svc_ifthen             (int is_conf, const char *ident, char *stmt, int quiet);
 
 int         svc_parse_jobstr       (char *str, size_t len, void *user_data, int (*found)(svc_t *, void *), int (not_found)(char *, char *, void *));
 
@@ -251,6 +259,7 @@ static inline int svc_is_tty       (svc_t *svc) { return svc && SVC_TYPE_TTY    
 static inline int svc_is_runtask   (svc_t *svc) { return svc && (SVC_TYPE_RUNTASK & svc->type);}
 static inline int svc_is_forking   (svc_t *svc) { return svc && svc->forking; }
 static inline int svc_is_manual    (svc_t *svc) { return svc && svc->manual; }
+static inline int svc_is_nohup     (svc_t *svc) { return svc && (0 == svc->sighup); }
 
 static inline int svc_in_runlevel  (svc_t *svc, int runlevel) { return svc && ISSET(svc->runlevels, runlevel); }
 static inline int svc_nohup        (svc_t *svc) { return svc &&  (0 == svc->sighup || 0 != svc->args_dirty); }
@@ -263,6 +272,7 @@ static inline void svc_starting    (svc_t *svc) { if (svc) svc->starting = 1;   
 static inline void svc_started     (svc_t *svc) { if (svc) svc->starting = 0;       }
 static inline int  svc_is_starting (svc_t *svc) { return svc && 0 != svc->starting; }
 static inline int  svc_is_running  (svc_t *svc) { return svc && svc->state == SVC_RUNNING_STATE; }
+static inline int  svc_is_stopping (svc_t *svc) { return svc && svc->state == SVC_STOPPING_STATE; }
 
 static inline int  svc_is_removed  (svc_t *svc) { return svc && svc->removed; }
 static inline int  svc_is_changed  (svc_t *svc) { return svc &&  0 != svc->dirty; }

@@ -1,6 +1,6 @@
 /* Limited tmpfiles.d implementation
  *
- * Copyright (c) 2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -78,8 +78,8 @@ static int do_delete(const char *fpath, const struct stat *sb, int tflag, struct
 	if (ftw->level == 0)
 		return 1;
 
-	if (remove(fpath))
-		warn("Failed removing condition %s", fpath);
+	if (remove(fpath) && errno != EBUSY)
+		warn("Failed removing %s", fpath);
 
 	return 0;
 
@@ -90,7 +90,7 @@ static int rmrf(const char *path)
 	if (!fisdir(path))
 		return 0;
 
-	nftw(path, do_delete, 20, FTW_DEPTH);
+	nftw(path, do_delete, 20, FTW_DEPTH | FTW_PHYS);
 	if (remove(path) && errno != ENOENT)
 		warn("Failed removing path %s", path);
 
@@ -434,6 +434,10 @@ static void tmpfiles(char *line)
 			}
 		}
 		break;
+	case 'X':
+	case 'x':
+		dbg("Unsupported x/X command, ignoring %s, no support for clean at runtime.", path);
+		break;
 	case 'Z':
 		opts = "-R";
 		/* fallthrough */
@@ -492,7 +496,7 @@ void tmpfilesd(void)
 
 		/* check for overrides */
 		for (j = i + 1; j < gl.gl_pathc; j++) {
-			if (strcmp(basename(fn), basename(gl.gl_pathv[j])))
+			if (strcmp(basenm(fn), basenm(gl.gl_pathv[j])))
 				continue;
 			fn = NULL;
 			break;

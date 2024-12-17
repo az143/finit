@@ -3,7 +3,6 @@
 
 * [Introduction](#introduction)
 * [Features](#features)
-* [Bootstrap](doc/bootstrap.md#bootstrap)
 * [Runlevels](#runlevels)
 * [Syntax](doc/config.md#syntax)
   * [Runparts & /etc/rc.local](#runparts--etcrclocal)
@@ -23,11 +22,10 @@ Introduction
 ------------
 
 Fast init for Linux systems.  Reverse engineered from the [EeePC
-fastinit][] over ten years ago by [Claudio Matsuoka][] — "gaps filled
-with frog DNA …"
+fastinit][] by [Claudio Matsuoka][] — "gaps filled with frog DNA …"
 
-![Alpine screenshot](img/finit4-screenshot.png)  
-*Figure 1: Screenshot showing Finit booting [Alpine Linux](https://www.alpinelinux.org/).*
+![Alpine screenshot](img/alpine-screenshot2.png)  
+*Figure 1: Screenshot of Finit booting [Alpine Linux (HowTo)](https://github.com/troglobit/finit/tree/master/contrib/alpine).*
 
 Features include:
 
@@ -66,7 +64,9 @@ distributions:
 > **Note:** support for various Linux distributions does not mean Finit
 > installs easily on all architectures.  The bundled install scripts are
 > examples for standard installations, tested on amd64 (x86_64) systems.
-> Custom setups, for embedded systems, can be found in [myLinux][].
+> Custom setups, e.g., for embedded systems, can be found in any of the
+> following [Buildroot][] based examples: [myLinux][], [Infix][], or the
+> plain [br2-finit-demo](https://github.com/troglobit/br2-finit-demo).
 
 
 Example
@@ -391,8 +391,7 @@ Right after the runlevel change when all services have started properly,
 No configuration stanza in `/etc/finit.conf` is required for `rc.local`.
 If it exists and is an executable shell script Finit calls it at the very
 end of the boot, before calling the `HOOK_SYSTEM_UP`.  See more on hooks
-in [doc/plugins.md](doc/plugins.md#hooks), and about the system bootstrap
-in [doc/bootstrap.md](doc/bootstrap.md).
+in [doc/plugins.md](doc/plugins.md#hooks).
 
 
 ### Limitations
@@ -406,8 +405,7 @@ The event loop is the whole thing which Finit is built around, except
 for runlevel S, which remains a slow procession through a lot of set up,
 with a few hooks and blocking call outs to external scripts.
 
-However, not all `initctl` commands are prohibited, supported commands:
-are:
+However, not all `initctl` commands are prohibited. Supported commands:
 
  - `inictl cond`: only operate of files in `/run/finit/cond`
  - `initctl enable/disable`: enabled run/task/service is activated on
@@ -707,6 +705,8 @@ and proposed extensions.
 [EeePC fastinit]:   https://web.archive.org/web/20071208212450/http://wiki.eeeuser.com/boot_process:the_boot_process
 [Claudio Matsuoka]: https://github.com/cmatsuoka
 [Joachim Wiberg]:   https://troglobit.com
+[Buildroot]:        https://buildroot.org
+[Infix]:            https://kernelkit.github.io
 [finit.conf(5)]:    https://man.troglobit.com/man5/finit.conf.5.html
 [License]:          https://en.wikipedia.org/wiki/MIT_License
 [License Badge]:    https://img.shields.io/badge/License-MIT-teal.svg

@@ -1,6 +1,6 @@
 /* Setup and save random seed at boot/shutdown
  *
- * Copyright (c) 2012-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2012-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,11 +42,29 @@
 #define RANDOM_BYTES (32*1024)
 #endif
 
+#ifdef RANDOMSEED
+static void fallback(FILE *fp)
+{
+	struct timeval tv;
+	int iter = 128;
+
+	gettimeofday(&tv, NULL);
+	srandom(tv.tv_sec % 3600);
+	while (iter--) {
+		uint32_t i, prng = random();
+
+		for (i = 0; i < sizeof(prng); i++)
+			fputc((prng >> (i * CHAR_BIT)) & UCHAR_MAX, fp);
+	}
+}
+#endif
+
 static void setup(void *arg)
 {
 #ifdef RANDOMSEED
 	struct rand_pool_info *rpi;
 	ssize_t len = 0;
+	struct stat st;
 	int rc = -1;
 	int fd, err;
 
@@ -55,7 +73,7 @@ static void setup(void *arg)
 		return;
 	}
 
-	if (!fexist(RANDOMSEED)) {
+	if (stat(RANDOMSEED, &st) || st.st_size < 512) {
 		int ret = 1;
 		mode_t prev;
 		FILE *fp;
@@ -64,16 +82,22 @@ static void setup(void *arg)
 		prev = umask(077);
 		fp = fopen(RANDOMSEED, "w");
 		if (fp) {
-			int iter = 128;
-			struct timeval tv;
+			const char *hwrng = "/dev/hwrng";
+			FILE *hw;
 
-			gettimeofday(&tv, NULL);
-			srandom(tv.tv_sec % 3600);
-			while (iter--) {
-				uint32_t i, prng = random();
+			hw = fopen(hwrng, "r");
+			if (hw) {
+				char buf[512];
+				size_t len;
 
-				for (i = 0; i < sizeof(prng); i++)
-					fputc((prng >> (i * CHAR_BIT)) & UCHAR_MAX, fp);
+				len = fread(buf, sizeof(buf[0]), sizeof(buf), hw);
+				if (len == 0)
+					fallback(fp);
+				else
+					len = fwrite(buf, sizeof(buf[0]), len, fp);
+				fclose(hw);
+			} else {
+				fallback(fp);
 			}
 			ret = fclose(fp);
 		}
@@ -130,7 +154,7 @@ static void setup(void *arg)
 	close(fd);
 	free(rpi);
 	if (rc < 0)
-		logit(LOG_ERR, "Failed adding entropy to kernel random pool: %s", strerror(err));
+		logit(LOG_WARNING, "Failed adding entropy to kernel random pool: %s", strerror(err));
 	print_result(rc < 0);
 	return;
 fallback:

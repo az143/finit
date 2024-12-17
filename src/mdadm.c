@@ -1,6 +1,6 @@
 /* Handle MD arrays
  *
- * Copyright (c) 2016-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2016-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -28,6 +28,7 @@
 #include <string.h>
 
 #include "helpers.h"
+#include "util.h"
 
 
 static glob_t *get_arrays(void)
@@ -48,17 +49,18 @@ static glob_t *get_arrays(void)
  */
 void mdadm_wait(void)
 {
-	size_t i;
 	glob_t *gl;
-	char cmd[160];
 
 	/* Setup kernel specific settings, e.g. allow broadcast ping, etc. */
 	gl = get_arrays();
 	if (gl) {
-		for (i = 0; i < gl->gl_pathc; i++) {
-			char *array;
+		size_t i;
 
-			array = basename(gl->gl_pathv[i]);
+		for (i = 0; i < gl->gl_pathc; i++) {
+			const char *array;
+			char cmd[160];
+
+			array = basenm(gl->gl_pathv[i]);
 			snprintf(cmd, sizeof(cmd), "mdadm --wait-clean /dev/%s >/dev/null", array);
 			run_interactive(cmd, "Marking MD array %s as clean", array);
 		}

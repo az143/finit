@@ -1,6 +1,6 @@
 /* Misc. shared utility functions for initctl, reboot and finit
  *
- * Copyright (c) 2016-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2016-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -42,6 +42,8 @@
 # include <sys/ioctl.h>
 #endif
 #include <sys/sysinfo.h>	/* sysinfo() */
+#include <sys/vfs.h> /* statfs */
+#include <linux/magic.h>
 #ifdef _LIBITE_LITE
 # include <libite/lite.h>
 #else
@@ -149,6 +151,19 @@ char *progname(char *arg0)
 	       prognm = arg0;
 
        return prognm;
+}
+
+/* basename(3) replacement that does not modify its argument */
+const char *basenm(const char *path)
+{
+	const char *basename;
+
+	basename = rindex(path, '/');
+	if (!basename)
+		return path;
+
+	basename++;
+	return basename;
 }
 
 char *str(char *fmt, ...)
@@ -557,6 +572,20 @@ int ismnt(char *file, char *dir, char *mode)
 int fismnt(char *dir)
 {
 	return ismnt("/proc/mounts", dir, NULL);
+}
+
+/* Return 1 if dir is a backed by tmpfs or overlayfs */
+int fistmpfs(char *dir)
+{
+	struct statfs info = {0};
+
+	if (statfs(dir, &info))
+		return 0;
+
+	if (info.f_type == TMPFS_MAGIC || info.f_type == OVERLAYFS_SUPER_MAGIC)
+		return 1;
+
+	return 0;
 }
 
 #ifdef HAVE_TERMIOS_H

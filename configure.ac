@@ -1,4 +1,4 @@
-AC_INIT([Finit], [4.5-rc5], [https://github.com/troglobit/finit/issues],
+AC_INIT([Finit], [4.8], [https://github.com/troglobit/finit/issues],
 	[finit], [https://troglobit.com/projects/finit/])
 AC_CONFIG_AUX_DIR(aux)
 AM_INIT_AUTOMAKE([1.11 foreign dist-xz subdir-objects])
@@ -16,9 +16,9 @@ AC_CONFIG_FILES([Makefile
 	plugins/Makefile
 	src/Makefile
 	system/Makefile system/10-hotplug.conf
-	tmpfiles.d/Makefile
 	test/test.env test/Makefile
-	test/lib/Makefile test/src/Makefile])
+	test/lib/Makefile test/src/Makefile
+	tmpfiles.d/Makefile])
 
 # Older versions of autoconf (<2.58) do not have AC_CONFIG_MACRO_DIR()
 #m4_include([m4/plugin.m4])
@@ -67,9 +67,17 @@ AC_ARG_ENABLE(fsckfix,
         AS_HELP_STRING([--enable-fsckfix], [Run fsck fix mode (options: -yf) on filesystems listed in /etc/fstab]),,[
 	enable_fsckfix=no])
 
+AC_ARG_ENABLE(cgroup,
+        AS_HELP_STRING([--disable-cgroup], [Disable cgroup v2 support, default: autodetect from /sys/fs/cgroup]),,[
+        enable_cgroup=yes])
+
 AC_ARG_ENABLE(redirect,
         AS_HELP_STRING([--disable-redirect], [Disable redirection of service output to /dev/null]),,[
 	enable_redirect=yes])
+
+AC_ARG_ENABLE(kernel_logging,
+        AS_HELP_STRING([--disable-kernel-logging], [Disable kernel logging to console (use 'quiet' instead!]),,[
+	enable_kernel_logging=yes])
 
 AC_ARG_ENABLE(logrotate,
         AS_HELP_STRING([--disable-logrotate], [Disable built-in rotation of /var/log/wtmp]),,[
@@ -106,6 +114,10 @@ AC_PLUGIN([urandom],       [yes], [Setup and save random seed at boot/shutdown])
 AC_PLUGIN([testserv],      [no],  [Test plugin to start test serv daemon])
 
 # Check for extra arguments or packages
+AC_ARG_WITH([bash-completion-dir],
+	AS_HELP_STRING([--with-bash-completion-dir[=PATH]], [Directory to install Bash completion, default: auto]),
+	[bash_dir=$withval], [bash_dir=yes])
+
 AC_ARG_WITH(fstab,
         AS_HELP_STRING([--with-fstab=FILE], [System default fstab, default $sysconfdir/fstab]),
 	[fstab=$withval], [fstab=yes])
@@ -165,8 +177,12 @@ AC_ARG_WITH(plugin-path,
 	[plugin_path=$withval], [plugin_path=yes])
 
 AC_ARG_WITH(rtc-date,
-	AS_HELP_STRING([--with-rtc-date=DATE], [If RTC date/time is too old, restore to DATE, format "YYYY-MM-DD HH:MM", default "2000-01-01 00:00"]),
+	AS_HELP_STRING([--with-rtc-date=DATE], [If RTC date/time is too old, restore to DATE, format "YYYY-MM-DD HH:MM:SS", default "2000-01-01 00:00:00"]),
 	[rtc_date=$withval], [rtc_date=no])
+
+AC_ARG_WITH(rtc-file,
+        AS_HELP_STRING([--with-rtc-file=FILE], [If RTC is missing, save and restore system clock from this file, default: no]),
+	[rtc_file=$withval], [rtc_file=no])
 
 ### Enable features ###########################################################################
 
@@ -176,6 +192,12 @@ AS_IF([test "x$enable_auto_reload" = "xyes"], [
 
 AS_IF([test "x$enable_kernel_cmdline" = "xyes"], [
         AC_DEFINE(KERNEL_CMDLINE, 1, [Dumpster diving after init args from /proc/cmdline])])
+
+AS_IF([test "x$enable_kernel_logging" = "xyes"], [
+        AC_DEFINE(KERNEL_LOGGING, 1, [Keep kernel warn/err logs to console])])
+
+AS_IF([test "x$enable_cgroup" = "xyes"], [
+        AC_DEFINE(CGROUP2_ENABLED, 1, [Autodetect cgroup v2 support from /sys/fs/cgroup])])
 
 AS_IF([test "x$enable_fastboot" = "xyes"], [
 	AC_DEFINE(FAST_BOOT, 1, [Skip fsck check on filesystems listed in /etc/fstab])])
@@ -196,6 +218,12 @@ AS_IF([test "x$enable_rescue" != "xno"], [
 AM_CONDITIONAL(LOGROTATE, [test "x$enable_logrotate" = "xyes"])
 
 ### With features ##############################################################################
+AS_IF([test "x$bash_dir" = "xyes"], [
+	PKG_CHECK_MODULES([BASH_COMPLETION], [bash-completion >= 2.0],
+		[BASH_DIR="$(pkg-config --variable=completionsdir bash-completion)"],
+		[BASH_DIR="$datadir/bash-completion/completions"])], [
+	BASH_DIR="$bash_dir"])
+
 AS_IF([test "x$with_fstab" != "xno"], [
 	AS_IF([test "x$fstab" = "xyes"], [fstab=$sysconfdir/fstab])
 	AC_EXPAND_DIR(fstab_path, "$fstab")
@@ -217,10 +245,9 @@ AC_DEFINE_UNQUOTED(FINIT_RCSD, "$rcsd_path", [Finit rcS.d/, default /etc/finit.d
 AC_SUBST(FINIT_RCSD, "$rcsd_path")
 
 AS_IF([test "x$with_rc_local" != "xno"], [
-	AS_IF([test "x$rclocal" = "xyes"], [
-		rclocal=$sysconfdir/rc.local])])
-AC_EXPAND_DIR(rclocal_path, "$rclocal")
-AC_DEFINE_UNQUOTED(FINIT_RC_LOCAL, "$rclocal_path", [Compat SysV /etc/rc.local file to run last at boot.])
+	AS_IF([test "x$rclocal" = "xyes"], [rclocal=$sysconfdir/rc.local])
+	AC_EXPAND_DIR(rclocal_path, "$rclocal")
+	AC_DEFINE_UNQUOTED(FINIT_RC_LOCAL, "$rclocal_path", [Compat SysV /etc/rc.local file to run last at boot.])])
 
 AS_IF([test "x$with_sysconfig" != "xno"], [
 	AS_IF([test "x$sysconfig" != "xdefault"], [
@@ -255,8 +282,15 @@ AS_IF([test "x$with_random_seed" != "xno"], [
 	AC_DEFINE_UNQUOTED(RANDOMSEED, "$random_path", [Improve random at boot by seeding it with sth from before.])])
 
 AS_IF([test "x$rtc_date" != "xno"], [
-	AC_DEFINE(RTC_TIMESTAMP_CUSTOM, "$rtc_date", [Custom RTC restore date, default: 2000-01-01 00:00])], [
+	AC_DEFINE_UNQUOTED(RTC_TIMESTAMP_CUSTOM, "$rtc_date", [Custom RTC restore date, default: 2000-01-01 00:00])], [
 	rtc_date=""])
+
+AS_IF([test "x$rtc_file" != "xno"], [
+	AS_IF([test "x$rtc_file" = "xyes"], [
+		rtc_file=/var/lib/misc/rtc])
+	AC_EXPAND_DIR(rtcfile_path, "$rtc_file")
+	AC_DEFINE_UNQUOTED(RTC_FILE, "$rtcfile_path", [Save and restore system time from this file if /dev/rtc is missing.])],[
+	AC_DEFINE_UNQUOTED(RTC_FILE, NULL)])
 
 AS_IF([test "x$with_keventd" != "xno"], [with_keventd=yes])
 
@@ -285,11 +319,12 @@ AS_IF([test "x$with_plugin_path" != "xno"], [
 	AC_DEFINE_UNQUOTED(EXTERNAL_PLUGIN_PATH, "$plugin_path", [Built-in default: /usr/lib/finit/plugins:/usr/local/lib/finit/plugins])])
 
 # Control build with automake flags
-AM_CONDITIONAL(STATIC,    [test "x$enable_static" = "xyes"])
+AM_CONDITIONAL(BASH,      [test "x$bash_dir"      != "xno"])
+AM_CONDITIONAL(STATIC,    [test "x$enable_static"  = "xyes"])
 AM_CONDITIONAL(KEVENTD,   [test "x$with_keventd"  != "xno"])
 AM_CONDITIONAL(SULOGIN,   [test "x$with_sulogin"  != "xno"])
 AM_CONDITIONAL(WATCHDOGD, [test "x$with_watchdog" != "xno"])
-AM_CONDITIONAL(DOC,       [test "x$enable_doc" = "xyes"])
+AM_CONDITIONAL(DOC,       [test "x$enable_doc"     = "xyes"])
 AM_CONDITIONAL(CONTRIB,   [test "x$enable_contrib" = "xyes"])
 AM_CONDITIONAL(TESTSERV,  [test "x$enable_testserv_plugin" = "xyes"])
 
@@ -303,7 +338,8 @@ pkglibdir=$libdir/finit
 AC_SUBST(pkglibexecdir)
 AC_EXPAND_DIR(pkglibexecdir, "$libexecdir/finit")
 AC_DEFINE_UNQUOTED(FINIT_EXECPATH_, "$pkglibexecdir", [Finit libexec path])
-AC_DEFINE_UNQUOTED(FINIT_RUNPATH_, "$runstatedir/finit/system", [Finit runtime dynamic system services])
+AC_EXPAND_DIR(finit_runpath, "$runstatedir/finit/system")
+AC_DEFINE_UNQUOTED(FINIT_RUNPATH_, "$finit_runpath", [Finit runtime dynamic system services])
 
 AC_EXPAND_DIR(plugin_path, "$pkglibdir/plugins")
 AC_SUBST(plugin_path)
@@ -326,6 +362,9 @@ AC_DEFINE_UNQUOTED(RESCUE_CONF, "$rescue_conf", [Finit rescue mode .conf])
 AC_EXPAND_DIR(sample_conf, "$pkglibdir/sample.conf")
 AC_DEFINE_UNQUOTED(SAMPLE_CONF, "$sample_conf", [Finit sameple.conf for initctl create])
 
+AC_EXPAND_DIR(bash_completion_dir, "$BASH_DIR")
+AC_SUBST(BASH_DIR, "$bash_completion_dir")
+
 AS_IF([test "$heading" = ""],   [heading="<DEFAULT>"])
 AS_IF([test "$heading" = "no"], [heading="<NONE>"])
 
@@ -340,15 +379,16 @@ cat <<EOF
 
 ------------------ Summary ------------------
  $PACKAGE_NAME version $PACKAGE_VERSION
-  Prefix................: $prefix
-  Exec prefix...........: $eprefix
+  Prefix................: $(eval echo $prefix)
+  Exec prefix...........: $(eval echo $exec_prefix)
+  Libdir................: $(eval echo $libdir)
   Sysconfdir............: `eval echo $sysconfdir`
   Localstatedir.........: `eval echo $localstatedir`
   Default fstab.........: `eval echo $fstab`
   Finit config file.....: $conf_path
   Finit config.d path...: $rcsd_path
   Finit plugin path.....: $plugin_path
-  Compat rc.local path..: $rclocal_path
+  Compat rc.local path..: `eval echo $rclocal`
   System environment....: ${sysconfig_path:-${sysconfig}}
   Random seed path......: $random_path
   C Compiler............: $CC $CFLAGS $CPPFLAGS $LDFLAGS $LIBS
@@ -358,14 +398,19 @@ Behavior:
   Boot heading..........: $heading
   Plugins...............: $plugins
   RTC restore date......: $RTC_DATE
+  RTC fallback file.....: $rtc_file
 
 Optional features:
   Install doc/..........: $enable_doc
   Install contrib/......: $enable_contrib
+  Bash completion.......: $bash_completion_dir
   Built-in keventd......: $with_keventd
   Built-in sulogin......: $with_sulogin $sulogin
   Built-in watchdogd....: $with_watchdog $watchdog
   Built-in logrotate....: $enable_logrotate
+  Use cgroup v2.........: $enable_cgroup
+  Parse kernel cmdline..: $enable_kernel_cmdline
+  Keep kernel logging...: $enable_kernel_logging
   Skip fsck check.......: $enable_fastboot
   Run fsck fix mode.....: $enable_fsckfix
   Redirect output.......: $enable_redirect

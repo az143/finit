@@ -174,17 +174,21 @@ layout, as specified in the [FHS][]:
          |- spool/
          `- tmp/
 
-Finit starts (very early) by mounting `/dev`, `/proc/`, and `/sys`,
-unless they (i.e., `/dev`) are already mounted.  When all plugins and
-other, core Finit functions, have been set up, all relevant filesystems
-(`PASS > 0`) are checked and mounted from the selected `fstab`, either
+Finit starts by mounting the critical file systems `/dev`, `/proc/`, and
+`/sys`, unless they are already mounted.  When all plugins and other,
+core Finit functions, have been set up, all relevant filesystems (where
+`PASS > 0`) are checked and mounted from the selected `fstab`, either
 the default `/etc/fstab`, or any custom one selected from the command
 line, or at build time.
 
-Any file system not listed `fstab` are automatically mounted by Finit,
-as listed above, provided their respective mount point exists.
+To provide a smooth ride, file system not listed in the given `fstab`,
+e.g. `/tmp` and `/run`, are automatically mounted by Finit, as listed
+above, provided their respective mount point exists.
 
 With all filesystems mounted, Finit calls `swapon`.
+
+> **Tip:** to see what happens when all filesystems are mounted, have a
+> look at the [`bootmisc.so` plugin](plugins.md).
 
 At shutdown, and after having stopped all services and other lingering
 processes have been killed, filesystems are unmounted in the reverse
@@ -202,12 +206,13 @@ order, and `swapoff` is called.
  - `  0`: shutdown
 
 Runlevels are declared per service/run/task/sysv command.  Starting in
-runlevel S ([bootStrap](bootstrap.md)), usually only for tasks supposed
-to run once at boot, and services like `syslogd`, which you need to
-start and run throughout the whole time your system is up.  Before `S`
-is started, however, Finit performs a lot of housekeeping tasks like
-mounting all filesystems, calling `fsck` if needed, and making sure the
-everything is OK.
+runlevel S (bootStrap), usually only for tasks supposed to run once at
+boot, and services like `syslogd`, which you need to start and run
+throughout the whole time your system is up.
+
+Before `S` is started, however, Finit performs a lot of housekeeping
+tasks like mounting all filesystems, calling `fsck` if needed, and
+making sure the everything is OK.
 
     task [S] /lib/console-setup/console-setup.sh
     service [S12345] env:-/etc/default/rsyslog rsyslogd -n $RSYSLOGD_ARGS
@@ -363,17 +368,31 @@ most notably systemd and s6, other methods for signaling "readiness"
 arrived and daemons were adapted to these new schemes to a larger
 extent.
 
-As of Finit v4.4 partial support for systemd and s6 is available.  The
-native PID file mode of operation is still default, the other's can be
-defined per service, like this:
+As of Finit v4.4 partial support for systemd and s6 style readiness
+notification is available, and the native PID file mode of operation is,
+as of Finit v4.6 optional, by default it is still enabled, but this can
+be changed in `finit.conf`:
 
+    readiness none
+
+This will be made the default in Finit 5.0.  In this mode of operation,
+every service needs to explicitly declare their readiness notification,
+like this:
+
+    service notify:pid     watchdogd
     service notify:systemd foo
     service notify:s6      bar
+    service notify:none    qux
+
+The `notify:none` syntax is for completeness in systems which run in
+`readiness pid` mode (default).  Services declared with `notify:none`
+will assert ready condition as soon as Finit has started them, e.g.,
+`service/qux/ready`.
 
 To synchronize two services the following condition can be used:
 
-    service notify:systemd    A
-    service <service/A/ready> B
+    service notify:pid                 watchdogd
+    service <service/watchdogd/ready>  stress-ng --cpu 8
 
 For details on the syntax and options, see below.
 
@@ -452,7 +471,7 @@ Cgroups
 
 There are three major cgroup configuration directives:
 
- 1. Global top-level group: init, system, user, or a custom group
+ 1. Global top-level group: `init`, `system`, `user`, or a custom group
  2. Selecting a top-level group for a set of run/task/services
  3. Per run/task/service limits
 
@@ -503,6 +522,10 @@ except for expanding the shorthand `mem.` to `memory.`, if the file is
 not available, either the cgroup controller is not available in your
 Linux kernel, or the name is misspelled.
 
+A daemon using `SCHED_RR` currently need to run outside the default cgroups.
+
+    service [...] <...> cgroup.root /path/to/daemon arg -- Real-Time process
+
 > Linux cgroups and details surrounding values are not explained in the
 > Finit documentation.  The Linux admin-guide cover this well:
 > <https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html>
@@ -532,7 +555,7 @@ following directives:
 
 
 > **Note:** not all directives are available in `/etc/finit.d/*.conf`
-> and some directives are only available at [bootstrap][], runlevel `S`,
+> and some directives are only available at bootstrap, runlevel `S`,
 > see [Limitations](#limitations) below for details.
 
 
@@ -545,7 +568,7 @@ the contents of that file is used.
 
 Deprecated.  We recommend using `/etc/hostname` instead.
 
-> **Note:** only read and executed in runlevel S ([bootstrap][]).
+> **Note:** only read and executed in runlevel S (bootstrap).
 
 
 ### Kernel Modules
@@ -563,7 +586,7 @@ BusyBox mdev tool, add to `/etc/mdev.conf`:
 
     $MODALIAS=.*  root:root       0660    @modprobe -b "$MODALIAS"
 
-> **Note:** only read and executed in runlevel S ([bootstrap][]).
+> **Note:** only read and executed in runlevel S (bootstrap).
 
 
 ### Networking
@@ -576,7 +599,7 @@ Deprecated.  We recommend using dedicated task/run stanzas per runlevel,
 or `/etc/network/interfaces` if you have a system with `ifupdown`, like
 Debian, Ubuntu, Linux Mint, or an embedded BusyBox system.
 
-> **Note:** only read and executed in runlevel S ([bootstrap][]).
+> **Note:** only read and executed in runlevel S (bootstrap).
 
 
 ### Alternate finit.d/
@@ -631,7 +654,7 @@ stanzas can share the same rlimits if they are in the same .conf.
 
 **Syntax:** `runlevel <N>`
 
-The system runlevel to go to after [bootstrap][] (S) has completed.  `N`
+The system runlevel to go to after bootstrap (S) has completed.  `N`
 is the runlevel number 0-9, where 6 is reserved for reboot and 0 for
 halt.
 
@@ -640,7 +663,7 @@ Finit disables networking in this mode.
 
 *Default:* 2
 
-> **Note:** only read and executed in runlevel S ([bootstrap][]).
+> **Note:** only read and executed in runlevel S (bootstrap).
 
 
 ### One-shot Commands (sequence)
@@ -978,9 +1001,8 @@ previous stanza can also be written as:
 **Syntax:** `runparts [progress] [sysv] <DIR>`
 
 Call [run-parts(8)][] on `DIR` to run start scripts.  All executable
-files, or scripts, in the directory are called, in alphabetic order.
-The scripts in this directory are executed at the very end of runlevel
-`S`, [bootstrap][].
+files in the directory are called, in alphabetic order.  The scripts in
+this directory are executed at the very end of runlevel `S`.
 
 A common use-case for runparts scripts is to create and enable/disable
 services, which Finit will then apply when changing runlevel from S to
@@ -1005,10 +1027,9 @@ before continuing.  None of them can issue commands to start, stop, or
 restart other services.  Also, ensure all your services and programs
 either terminate or start in the background or you will block Finit.
 
-> **Note:** `runparts` scrips are only read and executed in runlevel S
-> ([bootstrap][]).  See [hook scripts](plugins.md#hooks) for other ways
-> to run scripts at certain points during the complete lifetime of the
-> system.
+> **Note:** `runparts` scrips are only read and executed in runlevel S.
+> See [hook scripts](plugins.md#hooks) for other ways to run scripts at
+> certain points during the complete lifetime of the system.
 
 **Recommendations:**
 
@@ -1121,8 +1142,8 @@ can be omitted to keep the kernel default.
     tty [12345] @console noclear vt220
 
 On really bare bones systems, or for board bringup, Finit can give you a
-shell prompt as soon as [bootstrap][] is done, without opening any
-device node:
+shell prompt as soon as bootstrap is done, without opening any device
+node:
 
     tty [12345789] notty
 
@@ -1357,12 +1378,11 @@ Watchdog
 When built `--with-watchdog` a separate service is built and installed
 in `/libexec/finit/watchdogd`.  If this exists at runtime, and the WDT
 device node exists, Finit will start it and treat it as the elected
-watchdog service to delegate its reboot to.  See [bootstrap][] for
-details.  This delegation is to ensure that the system is rebooted by a
-hardware watchdog timer -- on many embedded systems this is crucial to
-ensure all circuits on the board are properly reset for the next boot,
-in effect ensuring the system works the same after both a power-on and
-reboot event.
+watchdog service to delegate its reboot to.  This delegation is to
+ensure that the system is rebooted by a hardware watchdog timer -- on
+many embedded systems this is crucial to ensure all circuits on the
+board are properly reset for the next boot, in effect ensuring the
+system works the same after both a power-on and reboot event.
 
 The delegation is performed at the very last steps of system shutdown,
 if reboot has been selected and an elected watchdog is known, first a
@@ -1383,8 +1403,6 @@ functionality where `"V"` is written to the device before closing the
 device descriptor.  If the kernel driver has been built without this,
 the only option is to remove `/libexec/finit/watchdogd` or build without
 it at configure time.
-
-[bootstrap]: bootstrap.md
 
 
 keventd

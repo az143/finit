@@ -1,6 +1,6 @@
 /* Misc. shared utility functions for initctl, reboot and finit
  *
- * Copyright (c) 2016-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2016-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -55,6 +55,7 @@ extern char *prognm;
 #endif
 
 char *progname     (char *arg0);
+const char *basenm (const char *path);
 
 char *str          (char *fmt, ...)                        __attribute__ ((format (printf, 1, 2)));
 int   fnread       (char *buf, size_t len, char *fmt, ...) __attribute__ ((format (printf, 3, 4)));
@@ -79,6 +80,7 @@ void  de_dotdot    (char *file);
 
 int   ismnt        (char *file, char *dir, char *mode);
 int   fismnt       (char *dir);
+int   fistmpfs     (char *dir);
 
 #ifdef HAVE_TERMIOS_H
 int     ttinit     (void);
@@ -106,6 +108,26 @@ static inline int paste(char *buf, size_t len, const char *dir, const char *file
 
 	return snprintf(buf, len, "%s%s%s", dir,
 			fisslashdir(dir) ? "" : file[0] == '/' ? "" : "/", file);
+}
+
+/* ensure path has suffix */
+static inline int suffix(char *path, size_t len, const char *sfx)
+{
+	size_t slen = strlen(sfx);
+	size_t plen = strlen(path);
+
+	if (plen < slen)
+		slen = strlcat(path, sfx, len);
+	else {
+		plen -= slen;
+		if (strcmp(&path[plen], sfx))
+			slen = strlcat(path, sfx, len);
+	}
+
+	if (slen >= len)
+		return -1;
+
+	return 0;
 }
 
 #endif /* FINIT_UTIL_H_ */

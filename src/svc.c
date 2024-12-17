@@ -1,7 +1,7 @@
 /* Low-level service primitives and generic API for managing svc_t structures
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -649,7 +649,7 @@ int svc_enabled(svc_t *svc)
 		return 0;
 	}
 
-	if (!svc_ifthen(0, NULL, svc->ifstmt)) {
+	if (!svc_ifthen(0, NULL, svc->ifstmt, svc->nowarn)) {
 //		dbg("ifthen:%s>", svc->ifstmt[0] ? svc->ifstmt : "<");
 		return 0;
 	}
@@ -704,12 +704,14 @@ int svc_conflicts(svc_t *svc)
  * @is_conf: Set when called by service_mark_unavail()
  * @ident:   svc_t identififcation (name:id)
  * @stmt:    if: statement from .conf file
+ * @quiet:   If non-zero, do not warn in syslog
  *
  * Returns:
  * %TRUE(1) yes, use this svc_t, %FALSE(0) prune
  */
-int svc_ifthen(int is_conf, const char *ident, char *stmt)
+int svc_ifthen(int is_conf, const char *ident, char *stmt, int quiet)
 {
+	char stmts[MAX_IDENT_LEN];
 	int not = 0;
 	svc_t *svc;
 
@@ -724,39 +726,48 @@ int svc_ifthen(int is_conf, const char *ident, char *stmt)
 		if (is_conf)
 			return 1;
 
-		if (stmt[0] == '!') {
-			stmt++;
-			not++;
-		}
-
 		while (ptr[i] != '>' && ptr[i] != 0)
 			i++;
 		ptr[i] = 0;
 
-		cond = cond_get(stmt);
-		if (not && cond == COND_ON)
-			return 0;
-		if (!not && cond == COND_OFF)
-			return 0;
+		strlcpy(stmts, stmt, sizeof(stmts));
+		for (stmt = strtok(stmts, ","); stmt; stmt = strtok(NULL, ","), not = 0) {
+			if (stmt[0] == '!') {
+				stmt++;
+				not++;
+			}
+
+			cond = cond_get(stmt);
+			if (not && cond == COND_ON)
+				return 0;
+			if (!not && cond == COND_OFF)
+				return 0;
+		}
+
 		return 1;
 	}
 
 	if (!is_conf)
 		return 1;
 
-	if (stmt[0] == '!') {
-		stmt++;
-		not++;
-	}
+	strlcpy(stmts, stmt, sizeof(stmts));
+	for (stmt = strtok(stmts, ","); stmt; stmt = strtok(NULL, ","), not = 0) {
+		if (stmt[0] == '!') {
+			stmt++;
+			not++;
+		}
 
-	svc = svc_find_by_str(stmt);
-	if (not && svc) {
-		logit(LOG_NOTICE, "skipping %s, %s already loaded.", ident, svc_ident(svc, NULL, 0));
-		return 0;
-	}
-	if (!not && !svc) {
-		logit(LOG_NOTICE, "skipping %s, %s not available.", ident, stmt);
-		return 0;
+		svc = svc_find_by_str(stmt);
+		if (not && svc) {
+			if (!quiet)
+				logit(LOG_NOTICE, "skipping %s, %s already loaded.", ident, svc_ident(svc, NULL, 0));
+			return 0;
+		}
+		if (!not && !svc) {
+			if (!quiet)
+				logit(LOG_NOTICE, "skipping %s, %s not available.", ident, stmt);
+			return 0;
+		}
 	}
 
 	return 1;

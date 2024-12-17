@@ -1,7 +1,7 @@
 /* Misc. utility functions for finit and its plugins
  *
  * Copyright (c) 2008-2010  Claudio Matsuoka <cmatsuoka@gmail.com>
- * Copyright (c) 2008-2023  Joachim Wiberg <troglobit@gmail.com>
+ * Copyright (c) 2008-2024  Joachim Wiberg <troglobit@gmail.com>
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -86,6 +86,9 @@ void console_init(void)
 {
 	/* Enable line wrap, if disabled previously, e.g., qemu */
 	dprint(STDOUT_FILENO, "\033[?7h", 5);
+
+	/* Reset atttributes, background and foreground color  */
+	dprint(STDOUT_FILENO, "\033[49m\033[39m\e[2J", 14);
 
 	log_init();
 }
@@ -522,9 +525,10 @@ void networking(int updown)
 
 		pid = fork();
 		if (pid == 0) {
-			int rc = EX_OSERR;
 			const char *cmd;
+			char buf[256];
 			FILE *pp;
+			int rc;
 
 			setsid();
 			sig_unblock();
@@ -539,16 +543,16 @@ void networking(int updown)
 				cmd = "ifdown -a -f 2>&1";
 
 			pp = popen(cmd, "r");
-			if (pp) {
-				char buf[256];
+			if (!pp)
+				_exit(EX_OSERR);
 
-				while (fgets(buf, sizeof(buf), pp))
-					logit(LOG_NOTICE, "network: %s", chomp(buf));
+			while (fgets(buf, sizeof(buf), pp))
+				logit(LOG_NOTICE, "network: %s", chomp(buf));
 
-				rc = pclose(pp);
-			}
-
-			_exit(rc);
+			rc = pclose(pp);
+			if (rc == -1)
+				_exit(EX_OSERR);
+			_exit(WEXITSTATUS(rc));
 		}
 		cgroup_service("network", pid, NULL);
 		print(pid > 0 ? 0 : 1, "%s network interfaces ...",
